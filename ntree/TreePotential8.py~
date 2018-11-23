@@ -1,0 +1,195 @@
+from numba import jitclass, prange
+from numba import int32, deferred_type, optional, float64, boolean, int64, njit, jit
+import numpy as np
+
+
+node_type = deferred_type()
+
+spec = [
+    #('bounds', float64[:]),
+    ('size', float64),
+    #('points', float64[:,:]),
+    #('masses', float64[:]),
+    ('Npoints', int64),
+    ('mass', float64),
+    ('COM', float64[:]),
+    ('IsLeaf', boolean),
+#    ('HasChild', boolean[:]),
+    ('child0', optional(node_type)),
+    ('child1', optional(node_type)),
+    ('child2', optional(node_type)),
+    ('child3', optional(node_type)),
+    ('child4', optional(node_type)),
+    ('child5', optional(node_type)),
+    ('child6', optional(node_type)),
+    ('child7', optional(node_type))
+]
+
+@jitclass(spec)
+class BHTree(object):
+    def __init__(self, center, size):
+        self.mass = None
+        self.COM = None
+        self.center = center
+        self.size = size
+#        self.masses = masses
+#        self.mass = masses.sum()
+
+        self.HasChild = np.zeros(8,dtype=np.bool_)
+        self.child0 = None        
+        self.child1 = None
+        self.child2 = None
+        self.child3 = None
+        self.child4 = None
+        self.child5 = None
+        self.child6 = None
+        self.child7 = None
+
+    def InsertPoint(self, x, m):
+        """Inserts a point of position x and mass m into the tree."""
+        if self.COM is None: # no point already lives here, so let's make a leaf node and store the point there
+            self.COM  = x
+            self.mass = m
+            self.IsLeaf = True
+            return
+        #otherwise we gotta split this up
+        if self.IsLeaf:
+            #self.children = 8 * [None,]
+            self.SpawnChildWithPoint(self.COM, m)
+            self.IsLeaf = False    
+        self.SpawnChildWithPoint(x, m)
+        
+node_type.define(OctNode.class_type.instance_type)
+    def InsertPoint(self, x, m):
+        """Inserts a point of position x and mass m into the tree."""
+        if self.COM is None: # no point already lives here, so let's make a leaf node and store the point there
+            self.COM  = x
+            self.mass = m
+            self.IsLeaf = True
+            return
+        #otherwise we gotta split this up
+        if self.IsLeaf:
+            self.children = 8 * [None,]
+            self.SpawnChildWithPoint(self.COM, m)
+            self.IsLeaf = False    
+        self.SpawnChildWithPoint(x, m)
+                
+@njit
+def GenerateChildren(node):
+    N = node.Npoints
+    bounds = node.bounds
+    points = node.points
+    if N < 2:
+        return False
+
+    center = np.empty(3)
+    for i in range(3):
+        center[i] = np.median(points[:,i]) #(bounds[2*i+1] + bounds[2*i])/2
+    masks = np.zeros((8,N), dtype=np.bool_)
+    
+    x = node.points
+    m = node.masses
+
+    for i in range(N):
+        bin = 0
+        for k in range(3):
+            bin += (x[i,k] > center[k]) << k
+        masks[bin,i] = True
+        node.HasChild[bin] = True
+
+    if node.HasChild[0]:
+        node.child000 = OctNode(np.array([bounds[0], center[0], bounds[2], center[1], bounds[4], center[2]]), x[masks[0]], m[masks[0]])
+    if node.HasChild[1]:
+        node.child001 = OctNode(np.array([center[0], bounds[1], bounds[2], center[1], bounds[4], center[2]]), x[masks[1]], m[masks[1]])
+    if node.HasChild[2]:
+        node.child010 = OctNode(np.array([bounds[0], center[0], center[1], bounds[3], bounds[4], center[2]]), x[masks[2]], m[masks[2]])
+    if node.HasChild[3]:
+        node.child011 = OctNode(np.array([center[0], bounds[1], center[1], bounds[3], bounds[4], center[2]]), x[masks[3]], m[masks[3]])
+    if node.HasChild[4]:
+        node.child100 = OctNode(np.array([bounds[0], center[1], bounds[2], center[1], center[2], bounds[5]]), x[masks[4]], m[masks[4]])
+    if node.HasChild[5]:
+        node.child101 = OctNode(np.array([center[0], bounds[1], bounds[2], center[1], center[2], bounds[5]]), x[masks[5]], m[masks[5]])
+    if node.HasChild[6]:
+        node.child110 = OctNode(np.array([bounds[0], center[1], center[1], bounds[3], center[2], bounds[5]]), x[masks[6]], m[masks[6]])
+    if node.HasChild[7]:
+        node.child111 = OctNode(np.array([center[0], bounds[1], center[1], bounds[3], center[2], bounds[5]]), x[masks[7]], m[masks[7]])
+    
+    node.points = np.empty((1,1))
+    node.masses = np.empty(1)   
+    return True
+
+@jit
+def ConstructOctree(x, m):
+    #x = np.sort(x)
+    xmin, ymin, zmin = np.min(x,axis=0)
+    xmax, ymax, zmax = np.max(x,axis=0)
+    bounds = np.empty(6)
+    bounds[0] = xmin
+    bounds[1] = xmax
+    bounds[2] = ymin
+    bounds[3] = ymax
+    bounds[4] = zmin
+    bounds[5] = zmax
+    root = OctNode(bounds, x, m)
+    
+    nodes = np.array([root,],dtype=OctNode)
+    new_nodes = np.empty(8,dtype=OctNode)
+    leafnodes = []
+    divisible_nodes = True
+    depth = 0
+    while divisible_nodes:
+        N = len(nodes)
+        divisible_nodes = False
+        count = 0
+        depth += 1
+        for i in range(N):
+            if nodes[i].IsLeaf:
+                continue
+            else:
+                divisible_nodes += GenerateChildren(nodes[i])
+                if nodes[i].child000:
+                    new_nodes[count] = nodes[i].child000
+                    count += 1
+                if nodes[i].child001:
+                    new_nodes[count] = nodes[i].child001
+                    count += 1
+                if nodes[i].child010:
+                    new_nodes[count] = nodes[i].child010
+                    count += 1
+                if nodes[i].child011:
+                    new_nodes[count] = nodes[i].child011
+                    count += 1
+                if nodes[i].child100:
+                    new_nodes[count] = nodes[i].child100
+                    count += 1
+                if nodes[i].child101:
+                    new_nodes[count] = nodes[i].child101
+                    count += 1
+                if nodes[i].child110:
+                    new_nodes[count] = nodes[i].child110
+                    count += 1
+                if nodes[i].child111:
+                    new_nodes[count] = nodes[i].child111
+                    count += 1
+        if divisible_nodes:
+            nodes = new_nodes[:count]
+            new_nodes = np.empty(count*8, dtype=OctNode)
+    return root
+
+@jit
+def Potential(x, m, G=1., theta=0.7):
+    """Returns the approximate gravitational potential for a set of particles with positions x and masses m.
+
+    Arguments:
+    x -- shape (N,3) array of particle positions
+    m -- shape (N,) array of particle masses
+
+    Keyword arguments:
+    G -- gravitational constant (default 1.0)
+    theta -- cell opening angle used to control force accuracy (default 0.7)
+    """
+    tree = ConstructOctree(x,m)
+    result = np.zeros_like(m)
+    for i in range(len(result)):
+        result[i] = PotentialWalk(x[i], 0., tree, theta)
+    return G*result    

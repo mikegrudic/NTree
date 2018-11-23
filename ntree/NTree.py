@@ -1,0 +1,49 @@
+from .__init__ import *
+
+class NTree:
+    """Arbitrary dimensionality n-ant tree structure that stores arbitrary data associated with each point."""
+    def __init__(self, center, size, dim=3):
+        self.COM = None
+        self.center = center
+        self.size = size
+        self.data = None
+        self.IsLeaf = False
+        self.dim = dim
+        
+    def InsertPoint(self, x, data=None):
+        """Inserts a point of position x and mass m into the tree."""
+        if self.COM is None: # no point already lives here, so let's make a leaf node and store the point there
+            self.COM  = x
+            if data: self.data = data
+            self.IsLeaf = True
+            return
+        #otherwise we gotta split this up
+        if self.IsLeaf:
+            self.children = (1<< self.dim) * [None,]
+            self.SpawnChildWithPoint(self.COM, data)
+            self.IsLeaf = False    
+        self.SpawnChildWithPoint(x, data)
+    
+    def SpawnChildWithPoint(self, x, data=None):
+        """Spawns a child node for a point at position x and mass m to live in."""
+        signs = (x > self.center)
+        sector = SignsToSector(signs) # number from 0 to 2**dim - 1 deciding which n-ant 
+        if not self.children[sector]:
+            child_size = self.size/2
+            child_center =  self.center + child_size*(signs-0.5)
+            self.children[sector] = NTree(child_center, child_size, dim=self.dim)
+        self.children[sector].InsertPoint(x, data)
+
+    def ConstructTree(points, data=None):
+        mins = np.min(points,axis=0)
+        maxes = np.max(points,axis=0)
+        center = (maxes+mins)/2
+        size = np.max(maxes-mins)
+        root = NTree(center, size, dim=points.shape[1])
+        if data is None:
+            for i in range(len(points)):
+                root.InsertPoint(points[i])
+        else:
+            for i in range(len(points)):
+                root.InsertPoint(points[i], data[i])
+        return root
